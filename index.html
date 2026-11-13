@@ -15,7 +15,8 @@
         table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.06); font-size: 14px; }
         th, td { padding: 10px 12px; border: 1px solid #e1e4e8; text-align: left; }
         th { background: #f8f9fa; font-weight: 600; }
-        .info { margin-bottom: 10px; font-size: 14px; color: #444; }
+        .info { margin-bottom: 10px; font-size: 14px; color: #444; font-weight: 600; }
+        .error { color: #d93025; background: #fce8e6; padding: 10px; border-radius: 4px; margin-bottom: 15px; display: none; font-size: 14px; }
     </style>
 </head>
 <body>
@@ -25,10 +26,11 @@
     <div class="box">
         <label for="rawData"><b>Вставьте скопированные данные из таблицы (обязательно вместе с шапкой):</b></label>
         <textarea id="rawData" placeholder="Нажмите Ctrl+V сюда..."></textarea>
-        <button onclick="processData()">Посчитать время</button>
+        <button id="calcBtn" onclick="processData()">Посчитать время</button>
         <button class="copy-btn" onclick="copyTable()">Скопировать результат для Excel</button>
     </div>
 
+    <div class="error" id="errorBox"></div>
     <div class="info" id="statsInfo"></div>
 
     <div style="overflow-x: auto;">
@@ -48,7 +50,16 @@
     </div>
 
 <script>
-    // Парсер TSV с поддержкой переносов строк внутри кавычек Excel
+    function showError(msg) {
+        const errBox = document.getElementById('errorBox');
+        errBox.innerText = msg;
+        errBox.style.display = 'block';
+    }
+
+    function hideError() {
+        document.getElementById('errorBox').style.display = 'none';
+    }
+
     function parseTSV(text) {
         const rows = [];
         let currentRow = [];
@@ -86,12 +97,11 @@
         return rows;
     }
 
-    // Универсальный парсер дат (поддерживает DD.MM.YYYY HH:MM:SS и ISO)
     function parseCustomDate(str) {
         if (!str) return NaN;
         const clean = str.trim();
         
-        // Проверка формата DD.MM.YYYY HH:MM:SS или DD.MM.YYYY HH:MM
+        // Формат ДД.ММ.ГГГГ ЧЧ:ММ:СС или ДД.ММ.ГГГГ ЧЧ:ММ
         const ruMatch = clean.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
         if (ruMatch) {
             const day = parseInt(ruMatch[1], 10);
@@ -131,80 +141,98 @@
     }
 
     function processData() {
-        const raw = document.getElementById('rawData').value.trim();
-        if (!raw) return alert("Вставьте данные из таблицы!");
-
-        const rows = parseTSV(raw);
-        if (rows.length < 2) return alert("Слишком мало данных. Убедитесь, что скопировали шапку и строки.");
-
-        const headers = rows.map(h => h.trim());
-        const idxMarker = headers.indexOf('marker_id');
-        const idxStart = headers.indexOf('start_date');
-        const idxEnd = headers.indexOf('end_date');
-
-        if (idxMarker === -1 || idxStart === -1 || idxEnd === -1) {
-            return alert("Не найдены обязательные колонки: marker_id, start_date или end_date. Проверьте шапку таблицы!");
-        }
-
-        const users = {};
-        let validRows = 0;
-
-        for (let i = 1; i < rows.length; i++) {
-            const row = rows[i];
-            if (row.length <= idxMarker) continue;
-
-            const markerId = (row[idxMarker] || '').trim();
-            if (!markerId) continue;
-
-            const startTs = parseCustomDate(row[idxStart]);
-            const endTs = parseCustomDate(row[idxEnd]);
-
-            if (!users[markerId]) {
-                users[markerId] = {
-                    tasksCount: 0,
-                    minStart: Infinity,
-                    maxEnd: -Infinity,
-                    totalTimeMs: 0,
-                    validTimeTasks: 0
-                };
+        hideError();
+        try {
+            const raw = document.getElementById('rawData').value.trim();
+            if (!raw) {
+                showError("Поле пустое! Сначала вставьте скопированные данные из таблицы.");
+                return;
             }
 
-            const u = users[markerId];
-            u.tasksCount++;
-            validRows++;
-
-            if (!isNaN(startTs) && startTs < u.minStart) u.minStart = startTs;
-            if (!isNaN(endTs) && endTs > u.maxEnd) u.maxEnd = endTs;
-
-            if (!isNaN(startTs) && !isNaN(endTs) && endTs >= startTs) {
-                u.totalTimeMs += (endTs - startTs);
-                u.validTimeTasks++;
+            const rows = parseTSV(raw);
+            if (rows.length < 2) {
+                showError("Слишком мало строк. Убедитесь, что скопировали и шапку таблицы, и сами данные.");
+                return;
             }
+
+            // Берем первую строку (индекс 0) как заголовки
+            const headers = rows[0].map(h => h.trim());
+            const idxMarker = headers.indexOf('marker_id');
+            const idxStart = headers.indexOf('start_date');
+            const idxEnd = headers.indexOf('end_date');
+
+            if (idxMarker === -1 || idxStart === -1 || idxEnd === -1) {
+                showError(`Не найдены обязательные колонки! Найдены заголовки: ${headers.slice(0, 15).join(', ')}... Проверьте, что есть marker_id, start_date и end_date.`);
+                return;
+            }
+
+            const users = {};
+            let validRows = 0;
+
+            for (let i = 1; i < rows.length; i++) {
+                const row = rows[i];
+                if (row.length <= idxMarker) continue;
+
+                const markerId = (row[idxMarker] || '').trim();
+                if (!markerId) continue;
+
+                const startTs = parseCustomDate(row[idxStart]);
+                const endTs = parseCustomDate(row[idxEnd]);
+
+                if (!users[markerId]) {
+                    users[markerId] = {
+                        tasksCount: 0,
+                        minStart: Infinity,
+                        maxEnd: -Infinity,
+                        totalTimeMs: 0,
+                        validTimeTasks: 0
+                    };
+                }
+
+                const u = users[markerId];
+                u.tasksCount++;
+                validRows++;
+
+                if (!isNaN(startTs) && startTs < u.minStart) u.minStart = startTs;
+                if (!isNaN(endTs) && endTs > u.maxEnd) u.maxEnd = endTs;
+
+                if (!isNaN(startTs) && !isNaN(endTs) && endTs >= startTs) {
+                    u.totalTimeMs += (endTs - startTs);
+                    u.validTimeTasks++;
+                }
+            }
+
+            const tbody = document.querySelector('#resultTable tbody');
+            tbody.innerHTML = '';
+
+            const userKeys = Object.keys(users);
+            document.getElementById('statsInfo').innerText = `Успешно обработано строк: ${validRows} | Найдено пользователей: ${userKeys.length}`;
+
+            if (userKeys.length === 0) {
+                showError("Не найдено ни одного заполненного marker_id в строках данных.");
+                return;
+            }
+
+            userKeys.forEach(id => {
+                const u = users[id];
+                const minStart = u.minStart === Infinity ? null : u.minStart;
+                const maxEnd = u.maxEnd === -Infinity ? null : u.maxEnd;
+                const avgTimeMs = u.validTimeTasks > 0 ? (u.totalTimeMs / u.validTimeTasks) : NaN;
+
+                const tr = document.createElement('tr');
+                tr.innerHTML = `
+                    <td><b>${id}</b></td>
+                    <td>${u.tasksCount}</td>
+                    <td>${formatDate(minStart)}</td>
+                    <td>${formatDate(maxEnd)}</td>
+                    <td>${formatDuration(u.totalTimeMs)}</td>
+                    <td>${formatDuration(avgTimeMs)}</td>
+                `;
+                tbody.appendChild(tr);
+            });
+        } catch (e) {
+            showError("Произошла ошибка при обработке: " + e.message);
         }
-
-        const tbody = document.querySelector('#resultTable tbody');
-        tbody.innerHTML = '';
-
-        const userKeys = Object.keys(users);
-        document.getElementById('statsInfo').innerText = `Обработано строк: ${validRows} | Найдено пользователей: ${userKeys.length}`;
-
-        userKeys.forEach(id => {
-            const u = users[id];
-            const minStart = u.minStart === Infinity ? null : u.minStart;
-            const maxEnd = u.maxEnd === -Infinity ? null : u.maxEnd;
-            const avgTimeMs = u.validTimeTasks > 0 ? (u.totalTimeMs / u.validTimeTasks) : NaN;
-
-            const tr = document.createElement('tr');
-            tr.innerHTML = `
-                <td><b>${id}</b></td>
-                <td>${u.tasksCount}</td>
-                <td>${formatDate(minStart)}</td>
-                <td>${formatDate(maxEnd)}</td>
-                <td>${formatDuration(u.totalTimeMs)}</td>
-                <td>${formatDuration(avgTimeMs)}</td>
-            `;
-            tbody.appendChild(tr);
-        });
     }
 
     function copyTable() {
