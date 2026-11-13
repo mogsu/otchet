@@ -26,8 +26,8 @@
     <div class="box">
         <label for="rawData"><b>Вставьте скопированные данные из таблицы (обязательно вместе с шапкой):</b></label>
         <textarea id="rawData" placeholder="Нажмите Ctrl+V сюда..."></textarea>
-        <button id="calcBtn" onclick="processData()">Посчитать время</button>
-        <button class="copy-btn" onclick="copyTable()">Скопировать результат для Excel</button>
+        <button type="button" onclick="processData()">Посчитать время</button>
+        <button type="button" class="copy-btn" onclick="copyTable()">Скопировать результат для Excel</button>
     </div>
 
     <div class="error" id="errorBox"></div>
@@ -60,6 +60,7 @@
         document.getElementById('errorBox').style.display = 'none';
     }
 
+    // Безопасный парсер таблиц с учётом переносов строк внутри ячеек Excel
     function parseTSV(text) {
         const rows = [];
         let currentRow = [];
@@ -101,7 +102,7 @@
         if (!str) return NaN;
         const clean = str.trim();
         
-        // Формат ДД.ММ.ГГГГ ЧЧ:ММ:СС или ДД.ММ.ГГГГ ЧЧ:ММ
+        // Проверка русского формата: ДД.ММ.ГГГГ ЧЧ:ММ:СС или ДД.ММ.ГГГГ ЧЧ:ММ
         const ruMatch = clean.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
         if (ruMatch) {
             const day = parseInt(ruMatch[1], 10);
@@ -125,9 +126,9 @@
         const seconds = totalSec % 60;
 
         let parts = [];
-        if (hours > 0) parts.push(`${hours} ч.`);
-        if (minutes > 0) parts.push(`${minutes} мин.`);
-        if (seconds > 0 || parts.length === 0) parts.push(`${seconds} сек.`);
+        if (hours > 0) parts.push(hours + ' ч.');
+        if (minutes > 0) parts.push(minutes + ' мин.');
+        if (seconds > 0 || parts.length === 0) parts.push(seconds + ' сек.');
         return parts.join(' ');
     }
 
@@ -155,14 +156,13 @@
                 return;
             }
 
-            // Берем первую строку (индекс 0) как заголовки
             const headers = rows[0].map(h => h.trim());
             const idxMarker = headers.indexOf('marker_id');
             const idxStart = headers.indexOf('start_date');
             const idxEnd = headers.indexOf('end_date');
 
             if (idxMarker === -1 || idxStart === -1 || idxEnd === -1) {
-                showError(`Не найдены обязательные колонки! Найдены заголовки: ${headers.slice(0, 15).join(', ')}... Проверьте, что есть marker_id, start_date и end_date.`);
+                showError("Не найдены обязательные колонки! Найдены заголовки: " + headers.slice(0, 15).join(', ') + "... Проверьте наличие marker_id, start_date и end_date.");
                 return;
             }
 
@@ -206,7 +206,7 @@
             tbody.innerHTML = '';
 
             const userKeys = Object.keys(users);
-            document.getElementById('statsInfo').innerText = `Успешно обработано строк: ${validRows} | Найдено пользователей: ${userKeys.length}`;
+            document.getElementById('statsInfo').innerText = "Успешно обработано строк: " + validRows + " | Найдено пользователей: " + userKeys.length;
 
             if (userKeys.length === 0) {
                 showError("Не найдено ни одного заполненного marker_id в строках данных.");
@@ -220,14 +220,13 @@
                 const avgTimeMs = u.validTimeTasks > 0 ? (u.totalTimeMs / u.validTimeTasks) : NaN;
 
                 const tr = document.createElement('tr');
-                tr.innerHTML = `
-                    <td><b>${id}</b></td>
-                    <td>${u.tasksCount}</td>
-                    <td>${formatDate(minStart)}</td>
-                    <td>${formatDate(maxEnd)}</td>
-                    <td>${formatDuration(u.totalTimeMs)}</td>
-                    <td>${formatDuration(avgTimeMs)}</td>
-                `;
+                tr.innerHTML = 
+                    '<td><b>' + id + '</b></td>' +
+                    '<td>' + u.tasksCount + '</td>' +
+                    '<td>' + formatDate(minStart) + '</td>' +
+                    '<td>' + formatDate(maxEnd) + '</td>' +
+                    '<td>' + formatDuration(u.totalTimeMs) + '</td>' +
+                    '<td>' + formatDuration(avgTimeMs) + '</td>';
                 tbody.appendChild(tr);
             });
         } catch (e) {
@@ -246,9 +245,3 @@
             tsv.push(rowData.join('\t'));
         }
         navigator.clipboard.writeText(tsv.join('\n')).then(() => {
-            alert("Таблица скопирована! Вставьте её в Excel или Google Таблицы (Ctrl+V).");
-        });
-    }
-</script>
-</body>
-</html>
