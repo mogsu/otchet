@@ -1,0 +1,225 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <title>Генератор отчётов по обучению</title>
+    <style>
+        body { font-family: system-ui, -apple-system, sans-serif; max-width: 1200px; margin: 20px auto; padding: 0 20px; background: #f4f6f8; color: #333; }
+        h1 { font-size: 22px; margin-bottom: 10px; }
+        .controls { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.05); margin-bottom: 20px; }
+        textarea { width: 100%; height: 150px; margin: 10px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 12px; box-sizing: border-box; }
+        .settings { display: flex; gap: 20px; margin-bottom: 15px; flex-wrap: wrap; }
+        label { font-size: 14px; display: flex; flex-direction: column; gap: 5px; font-weight: 600; }
+        select { padding: 6px; border-radius: 4px; border: 1px solid #ccc; }
+        button { background: #0066cc; color: white; border: none; padding: 10px 20px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; }
+        button:hover { background: #0052a3; }
+        button.copy-btn { background: #28a745; margin-left: 10px; }
+        button.copy-btn:hover { background: #218838; }
+        table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.05); font-size: 14px; }
+        th, td { padding: 10px 12px; border: 1px solid #e1e4e8; text-align: left; }
+        th { background: #f8f9fa; font-weight: 600; }
+        .stats { margin-bottom: 10px; font-size: 14px; color: #555; }
+    </style>
+</head>
+<body>
+
+    <h1>Автоматизация отчёта по обучению сотрудников</h1>
+    
+    <div class="controls">
+        <div class="settings">
+            <label>Колонка ID ученика:
+                <select id="idCol">
+                    <option value="person_id">person_id</option>
+                    <option value="marker_id">marker_id</option>
+                </select>
+            </label>
+            <label>Колонка оценки (качество):
+                <select id="scoreCol">
+                    <option value="quality">quality</option>
+                    <option value="OUTPUT:score">OUTPUT:score</option>
+                    <option value="consistency">consistency</option>
+                </select>
+            </label>
+            <label>Фильтр по статусу (status):
+                <select id="statusFilter">
+                    <option value="ALL">Все строки</option>
+                    <option value="ACCEPTED">Только ACCEPTED</option>
+                    <option value="SUBMITTED">Только SUBMITTED</option>
+                </select>
+            </label>
+        </div>
+
+        <label>Вставьте скопированные данные из Excel / Google Таблиц (вместе с шапкой):</label>
+        <textarea id="rawData" placeholder="Нажмите Ctrl+V сюда..."></textarea>
+        
+        <button onclick="processData()">Сформировать отчёт</button>
+        <button class="copy-btn" onclick="copyTable()">Скопировать таблицу для Excel</button>
+    </div>
+
+    <div class="stats" id="statsInfo"></div>
+    <div style="overflow-x: auto;">
+        <table id="resultTable">
+            <thead>
+                <tr>
+                    <th>ID ученика</th>
+                    <th>Кол-во задач</th>
+                    <th>Дата начала обучения</th>
+                    <th>Дата окончания обучения</th>
+                    <th>Продолжительность обучения</th>
+                    <th>Общее время выполнения</th>
+                    <th>Среднее время выполнения</th>
+                    <th>Качество (среднее)</th>
+                </tr>
+            </thead>
+            <tbody></tbody>
+        </table>
+    </div>
+
+<script>
+    function formatDuration(ms) {
+        if (!ms || ms < 0) return "0 мин";
+        const totalSec = Math.floor(ms / 1000);
+        const days = Math.floor(totalSec / 86400);
+        const hours = Math.floor((totalSec % 86400) / 3600);
+        const minutes = Math.floor((totalSec % 3600) / 60);
+        const seconds = totalSec % 60;
+
+        let res = [];
+        if (days > 0) res.push(`${days} д.`);
+        if (hours > 0) res.push(`${hours} ч.`);
+        if (minutes > 0) res.push(`${minutes} мин.`);
+        if (days === 0 && hours === 0 && minutes === 0) res.push(`${seconds} сек.`);
+        return res.join(' ');
+    }
+
+    function formatDate(ts) {
+        if (!ts) return "-";
+        const d = new Date(ts);
+        if (isNaN(d.getTime())) return "-";
+        return d.toLocaleString('ru-RU', { day: '2-digit', month: '2-digit', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+    }
+
+    function processData() {
+        const text = document.getElementById('rawData').value.trim();
+        if (!text) return alert("Вставьте данные в текстовое поле!");
+
+        const lines = text.split(/\r?\n/);
+        const headers = lines[0].split('\t').map(h => h.trim());
+
+        const idColName = document.getElementById('idCol').value;
+        const scoreColName = document.getElementById('scoreCol').value;
+        const statusFilter = document.getElementById('statusFilter').value;
+
+        const idx = {
+            id: headers.indexOf(idColName),
+            score: headers.indexOf(scoreColName),
+            status: headers.indexOf('status'),
+            started: headers.indexOf('started_at') !== -1 ? headers.indexOf('started_at') : headers.indexOf('start_date'),
+            submitted: headers.indexOf('submitted_at') !== -1 ? headers.indexOf('submitted_at') : headers.indexOf('end_date')
+        };
+
+        if (idx.id === -1) return alert(`Не найдена колонка ${idColName}. Убедитесь, что вы скопировали шапку таблицы!`);
+
+        const users = {};
+        let processedRows = 0;
+
+        for (let i = 1; i < lines.length; i++) {
+            if (!lines[i].trim()) continue;
+            const cols = lines[i].split('\t');
+
+            if (statusFilter !== 'ALL' && idx.status !== -1) {
+                if ((cols[idx.status] || '').trim().toUpperCase() !== statusFilter) continue;
+            }
+
+            const userId = (cols[idx.id] || '').trim();
+            if (!userId) continue;
+
+            if (!users[userId]) {
+                users[userId] = {
+                    count: 0,
+                    minStart: Infinity,
+                    maxEnd: -Infinity,
+                    totalTaskTimeMs: 0,
+                    validTimeTasks: 0,
+                    totalScore: 0,
+                    validScoreTasks: 0
+                };
+            }
+
+            const u = users[userId];
+            u.count++;
+            processedRows++;
+
+            // Обработка дат и времени выполнения
+            const startStr = idx.started !== -1 ? cols[idx.started] : null;
+            const endStr = idx.submitted !== -1 ? cols[idx.submitted] : null;
+
+            const startTs = startStr ? Date.parse(startStr) : NaN;
+            const endTs = endStr ? Date.parse(endStr) : NaN;
+
+            if (!isNaN(startTs) && startTs < u.minStart) u.minStart = startTs;
+            if (!isNaN(endTs) && endTs > u.maxEnd) u.maxEnd = endTs;
+
+            if (!isNaN(startTs) && !isNaN(endTs) && endTs >= startTs) {
+                u.totalTaskTimeMs += (endTs - startTs);
+                u.validTimeTasks++;
+            }
+
+            // Обработка оценки
+            if (idx.score !== -1 && cols[idx.score]) {
+                const val = parseFloat(cols[idx.score].replace(',', '.'));
+                if (!isNaN(val)) {
+                    u.totalScore += val;
+                    u.validScoreTasks++;
+                }
+            }
+        }
+
+        const tbody = document.querySelector('#resultTable tbody');
+        tbody.innerHTML = '';
+
+        const userIds = Object.keys(users);
+        document.getElementById('statsInfo').innerText = `Обработано строк: ${processedRows} | Уникальных учеников: ${userIds.length}`;
+
+        userIds.forEach(id => {
+            const u = users[id];
+            const minStart = u.minStart === Infinity ? null : u.minStart;
+            const maxEnd = u.maxEnd === -Infinity ? null : u.maxEnd;
+            
+            const studyDuration = (minStart && maxEnd && maxEnd >= minStart) ? formatDuration(maxEnd - minStart) : "-";
+            const totalTime = u.validTimeTasks > 0 ? formatDuration(u.totalTaskTimeMs) : "-";
+            const avgTime = u.validTimeTasks > 0 ? formatDuration(u.totalTaskTimeMs / u.validTimeTasks) : "-";
+            const avgScore = u.validScoreTasks > 0 ? (u.totalScore / u.validScoreTasks).toFixed(2) : "-";
+
+            const tr = document.createElement('tr');
+            tr.innerHTML = `
+                <td>${id}</td>
+                <td>${u.count}</td>
+                <td>${formatDate(minStart)}</td>
+                <td>${formatDate(maxEnd)}</td>
+                <td>${studyDuration}</td>
+                <td>${totalTime}</td>
+                <td>${avgTime}</td>
+                <td><b>${avgScore}</b></td>
+            `;
+            tbody.appendChild(tr);
+        });
+    }
+
+    function copyTable() {
+        const table = document.getElementById('resultTable');
+        let tsv = [];
+        for (let row of table.rows) {
+            let rowData = [];
+            for (let cell of row.cells) {
+                rowData.push(cell.innerText);
+            }
+            tsv.push(rowData.join('\t'));
+        }
+        navigator.clipboard.writeText(tsv.join('\n')).then(() => {
+            alert("Отчёт скопирован! Теперь можно нажать Ctrl+V в Excel или Google Таблицах.");
+        });
+    }
+</script>
+</body>
+</html>
