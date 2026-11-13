@@ -2,10 +2,11 @@
 <html lang="ru">
 <head>
     <meta charset="UTF-8">
-    <title>Расчёт времени обучения по marker_id</title>
+    <title>Расчёт времени обучения (v2.0)</title>
     <style>
         body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 20px auto; padding: 0 20px; background: #f4f6f8; color: #333; }
-        h1 { font-size: 20px; margin-bottom: 15px; }
+        h1 { font-size: 20px; margin-bottom: 15px; display: flex; align-items: center; gap: 10px; }
+        .badge { background: #e1ecf4; color: #0066cc; font-size: 12px; padding: 3px 8px; border-radius: 12px; }
         .box { background: #fff; padding: 20px; border-radius: 8px; box-shadow: 0 2px 4px rgba(0,0,0,0.06); margin-bottom: 20px; }
         textarea { width: 100%; height: 140px; margin: 10px 0; padding: 10px; border: 1px solid #ccc; border-radius: 4px; font-family: monospace; font-size: 12px; box-sizing: border-box; }
         button { background: #0066cc; color: white; border: none; padding: 10px 18px; border-radius: 4px; cursor: pointer; font-size: 14px; font-weight: 600; }
@@ -15,19 +16,19 @@
         table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 2px 4px rgba(0,0,0,0.06); font-size: 14px; }
         th, td { padding: 10px 12px; border: 1px solid #e1e4e8; text-align: left; }
         th { background: #f8f9fa; font-weight: 600; }
-        .info { margin-bottom: 10px; font-size: 14px; color: #444; font-weight: 600; }
+        .info { margin-bottom: 10px; font-size: 14px; color: #1e7e34; font-weight: 600; }
         .error { color: #d93025; background: #fce8e6; padding: 10px; border-radius: 4px; margin-bottom: 15px; display: none; font-size: 14px; }
     </style>
 </head>
 <body>
 
-    <h1>Отчёт по времени выполнения задач</h1>
+    <h1>Отчёт по времени выполнения задач <span class="badge">Версия 2.0</span></h1>
     
     <div class="box">
-        <label for="rawData"><b>Вставьте скопированные данные из таблицы (обязательно вместе с шапкой):</b></label>
+        <label for="rawData"><b>Вставьте скопированные данные из таблицы (вместе с шапкой):</b></label>
         <textarea id="rawData" placeholder="Нажмите Ctrl+V сюда..."></textarea>
-        <button type="button" onclick="processData()">Посчитать время</button>
-        <button type="button" class="copy-btn" onclick="copyTable()">Скопировать результат для Excel</button>
+        <button type="button" id="calcBtn">Посчитать время</button>
+        <button type="button" class="copy-btn" id="copyBtn">Скопировать результат для Excel</button>
     </div>
 
     <div class="error" id="errorBox"></div>
@@ -60,7 +61,6 @@
         document.getElementById('errorBox').style.display = 'none';
     }
 
-    // Безопасный парсер таблиц с учётом переносов строк внутри ячеек Excel
     function parseTSV(text) {
         const rows = [];
         let currentRow = [];
@@ -101,9 +101,10 @@
     function parseCustomDate(str) {
         if (!str) return NaN;
         const clean = str.trim();
-        
-        // Проверка русского формата: ДД.ММ.ГГГГ ЧЧ:ММ:СС или ДД.ММ.ГГГГ ЧЧ:ММ
-        const ruMatch = clean.match(/^(\d{1,2})\.(\d{1,2})\.(\d{4})(?:\s+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
+        if (!clean) return NaN;
+
+        // 1. Формат ДД.ММ.ГГГГ ЧЧ:ММ:СС или ДД/ММ/ГГГГ ЧЧ:ММ
+        const ruMatch = clean.match(/^(\d{1,2})[\.\/](\d{1,2})[\.\/](\d{4})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?/);
         if (ruMatch) {
             const day = parseInt(ruMatch[1], 10);
             const month = parseInt(ruMatch[2], 10) - 1;
@@ -114,7 +115,19 @@
             return new Date(year, month, day, hour, min, sec).getTime();
         }
 
-        // Стандартный формат (YYYY-MM-DD HH:MM:SS и т.д.)
+        // 2. Формат ГГГГ-ММ-ДД ЧЧ:ММ:СС (без часового пояса)
+        const isoMatch = clean.match(/^(\d{4})-(\d{1,2})-(\d{1,2})(?:[T\s]+(\d{1,2}):(\d{2})(?::(\d{2}))?)?$/);
+        if (isoMatch) {
+            const year = parseInt(isoMatch[1], 10);
+            const month = parseInt(isoMatch[2], 10) - 1;
+            const day = parseInt(isoMatch[3], 10);
+            const hour = isoMatch[4] ? parseInt(isoMatch[4], 10) : 0;
+            const min = isoMatch[5] ? parseInt(isoMatch[5], 10) : 0;
+            const sec = isoMatch[6] ? parseInt(isoMatch[6], 10) : 0;
+            return new Date(year, month, day, hour, min, sec).getTime();
+        }
+
+        // 3. Любой другой стандартный формат (например ISO с Z или +03:00)
         return Date.parse(clean);
     }
 
@@ -125,7 +138,7 @@
         const minutes = Math.floor((totalSec % 3600) / 60);
         const seconds = totalSec % 60;
 
-        let parts = [];
+        const parts = [];
         if (hours > 0) parts.push(hours + ' ч.');
         if (minutes > 0) parts.push(minutes + ' мин.');
         if (seconds > 0 || parts.length === 0) parts.push(seconds + ' сек.');
@@ -143,26 +156,37 @@
 
     function processData() {
         hideError();
+        const statsEl = document.getElementById('statsInfo');
+        statsEl.innerText = "Идёт расчёт...";
+
         try {
             const raw = document.getElementById('rawData').value.trim();
             if (!raw) {
+                statsEl.innerText = "";
                 showError("Поле пустое! Сначала вставьте скопированные данные из таблицы.");
                 return;
             }
 
             const rows = parseTSV(raw);
             if (rows.length < 2) {
+                statsEl.innerText = "";
                 showError("Слишком мало строк. Убедитесь, что скопировали и шапку таблицы, и сами данные.");
                 return;
             }
 
-            const headers = rows[0].map(h => h.trim());
+            // Читаем первую строку (индекс 0) как заголовки
+            const headerRow = rows[0];
+            const headers = headerRow.map(function(h) {
+                return String(h).replace(/^\uFEFF/, '').trim().toLowerCase();
+            });
+
             const idxMarker = headers.indexOf('marker_id');
             const idxStart = headers.indexOf('start_date');
             const idxEnd = headers.indexOf('end_date');
 
             if (idxMarker === -1 || idxStart === -1 || idxEnd === -1) {
-                showError("Не найдены обязательные колонки! Найдены заголовки: " + headers.slice(0, 15).join(', ') + "... Проверьте наличие marker_id, start_date и end_date.");
+                statsEl.innerText = "";
+                showError("Не найдены колонки marker_id, start_date или end_date. В первой строке найдено: " + headers.slice(0, 15).join(', '));
                 return;
             }
 
@@ -171,9 +195,9 @@
 
             for (let i = 1; i < rows.length; i++) {
                 const row = rows[i];
-                if (row.length <= idxMarker) continue;
+                if (!row || row.length <= idxMarker) continue;
 
-                const markerId = (row[idxMarker] || '').trim();
+                const markerId = String(row[idxMarker] || '').trim();
                 if (!markerId) continue;
 
                 const startTs = parseCustomDate(row[idxStart]);
@@ -206,42 +230,47 @@
             tbody.innerHTML = '';
 
             const userKeys = Object.keys(users);
-            document.getElementById('statsInfo').innerText = "Успешно обработано строк: " + validRows + " | Найдено пользователей: " + userKeys.length;
+            statsEl.innerText = "Готово! Обработано строк: " + validRows + " | Найдено пользователей: " + userKeys.length;
 
             if (userKeys.length === 0) {
                 showError("Не найдено ни одного заполненного marker_id в строках данных.");
                 return;
             }
 
-            userKeys.forEach(id => {
+            userKeys.forEach(function(id) {
                 const u = users[id];
                 const minStart = u.minStart === Infinity ? null : u.minStart;
                 const maxEnd = u.maxEnd === -Infinity ? null : u.maxEnd;
-                const avgTimeMs = u.validTimeTasks > 0 ? (u.totalTimeMs / u.validTimeTasks) : NaN;
-
-                const tr = document.createElement('tr');
-                tr.innerHTML = 
-                    '<td><b>' + id + '</b></td>' +
-                    '<td>' + u.tasksCount + '</td>' +
-                    '<td>' + formatDate(minStart) + '</td>' +
-                    '<td>' + formatDate(maxEnd) + '</td>' +
-                    '<td>' + formatDuration(u.totalTimeMs) + '</td>' +
-                    '<td>' + formatDuration(avgTimeMs) + '</td>';
-                tbody.appendChild(tr);
-            });
-        } catch (e) {
-            showError("Произошла ошибка при обработке: " + e.message);
-        }
-    }
-
-    function copyTable() {
-        const table = document.getElementById('resultTable');
-        let tsv = [];
-        for (let row of table.rows) {
-            let rowData = [];
-            for (let cell of row.cells) {
-                rowData.push(cell.innerText);
-            }
-            tsv.push(rowData.join('\t'));
-        }
-        navigator.clipboard.writeText(tsv.join('\n')).then(() => {
+const avgTimeMs = u.validTimeTasks > 0 ? (u.totalTimeMs / u.validTimeTasks) : NaN;
+const tr = document.createElement('tr');
+tr.innerHTML =
+'' + id + '' +
+'' + u.tasksCount + '' +
+'' + formatDate(minStart) + '' +
+'' + formatDate(maxEnd) + '' +
+'' + formatDuration(u.totalTimeMs) + '' +
+'' + formatDuration(avgTimeMs) + '';
+tbody.appendChild(tr);
+});
+} catch (e) {
+statsEl.innerText = "";
+showError("Ошибка при обработке: " + e.message);
+}
+}
+function copyTable() {
+const table = document.getElementById('resultTable');
+const tsv = [];
+for (let i = 0; i < table.rows.length; i++) {
+const row = table.rows[i];
+const rowData = [];
+for (let j = 0; j < row.cells.length; j++) {
+rowData.push(row.cells[j].innerText);
+}
+tsv.push(rowData.join('\t'));
+}
+navigator.clipboard.writeText(tsv.join('\n')).then(function() {
+alert("Таблица скопирована! Вставьте её в Excel или Google Таблицы (Ctrl+V).");
+});
+}
+document.getElementById('calcBtn').addEventListener('click', processData);
+document.getElementById('copyBtn').addEventListener('click', copyTable);
